@@ -367,7 +367,8 @@ update_label.pack(pady=5)
 action_frame = tk.Frame(root)
 action_frame.pack(pady=5)
 
-
+delete_button = tk.Button(action_frame, text="❌ Delete Infected Files", command=lambda: delete_infected_files(output_box), bg="maroon", fg="white")
+delete_button.pack(side=tk.LEFT, padx=10)
 
 quarantine_button = tk.Button(action_frame, text="📦 Quarantine Infected Files", command=lambda: quarantine_files(output_box), bg="orange", fg="black")
 quarantine_button.pack(side=tk.LEFT)
