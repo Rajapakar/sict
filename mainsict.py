@@ -1,0 +1,400 @@
+import os
+import shutil
+import hashlib
+import urllib.request
+import time
+from PIL import Image, ImageDraw
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import ttk
+
+scan_paused = threading.Event()
+scan_stopped = threading.Event()
+
+def stop_scan():
+    scan_stopped.set()
+    output_box.insert(tk.END, "🛑 Scan stopped by user.\n")
+
+
+def toggle_pause():
+    if scan_paused.is_set():
+        scan_paused.clear()
+        pause_button.config(text="⏸ Pause Scan")
+        output_box.insert(tk.END, "▶️ Scan Resumed\n")
+    else:
+        scan_paused.set()
+        pause_button.config(text="▶️ Resume Scan")
+        output_box.insert(tk.END, "⏸ Scan Paused\n")
+
+AUTO_SCAN_INTERVAL = 10  # minutes
+def auto_scan():
+    def scanner():
+        while True:
+            folder = folder_entry.get()
+            if folder and os.path.isdir(folder):
+                output_box.insert(tk.END, f"\n[Auto Scan] Scanning folder: {folder}\n")
+                scan_directory(folder, output_box)
+            else:
+                output_box.insert(tk.END, "\n[Auto Scan] Skipped (no folder selected).\n")
+            time.sleep(AUTO_SCAN_INTERVAL * 60)
+    threading.Thread(target=scanner, daemon=True).start()
+
+class CircularProgressDonut:
+    def __init__(self, parent, size=120, width=15):
+        self.parent = parent
+        self.size = size
+        self.width = width
+        self.canvas = tk.Canvas(parent, width=size, height=size, highlightthickness=0, bg="white")
+        self.canvas.pack(pady=10)
+
+        # Outer arc (progress ring)
+        self.arc = self.canvas.create_arc(
+            width, width, size - width, size - width,
+            start=90, extent=0, style="arc", width=width, outline="green"
+        )
+
+        # Inner percent label
+        self.percent_text = self.canvas.create_text(
+            size // 2, size // 2,
+            text="0%", font=("Helvetica", 14, "bold"), fill="black"
+        )
+
+    def update_progress(self, percent):
+        # Color transition: Red → Orange → Yellow → Green
+        def get_color(p):
+            if p < 25:
+                return "#FF3333"  # Red
+            elif p < 50:
+                return "#FF9933"  # Orange
+            elif p < 75:
+                return "#FFDD33"  # Yellow
+            else:
+                return "#33CC33"  # Green
+
+        extent = (percent / 100) * -360  # Negative for clockwise
+        color = get_color(percent)
+
+        self.canvas.itemconfig(self.arc, extent=extent, outline=color)
+        self.canvas.itemconfig(self.percent_text, text=f"{int(percent)}%")
+
+    def hide(self):
+        self.canvas.pack_forget()
+
+    def show(self):
+        self.canvas.pack(pady=10)
+
+def start_scan():
+    ...
+    status_label.config(text="Scanning...")
+    ...
+    def run_scan():
+        ...
+        status_label.config(text="")  # Clear text
+
+def flash_tray_icon(icon, flash_count=6, interval=0.5):
+    def flasher():
+        original_image = icon.icon
+        blank_image = Image.new('RGB', (64, 64), "white")
+        for _ in range(flash_count):
+            icon.icon = blank_image
+            time.sleep(interval)
+            icon.icon = original_image
+            time.sleep(interval)
+    threading.Thread(target=flasher, daemon=True).start()
+
+
+# === CONFIG ===
+UPDATE_INTERVAL_MINUTES = 5
+VIRUS_DB_URL = "https://github.com/Rajapakar/"  # ✅ Replace with your raw file URL
+
+# === GLOBAL VARIABLES ===
+virus_hashes = set()
+infected_files = []
+last_update_time = ""
+
+# === CORE FUNCTIONS ===
+
+def calculate_sha256(filepath):
+    sha256 = hashlib.sha256()
+    try:
+        with open(filepath, 'rb') as f:
+            for block in iter(lambda: f.read(4096), b""):
+                sha256.update(block)
+        return sha256.hexdigest()
+    except Exception as e:
+        return None
+
+def fetch_and_update_hashes():
+    global virus_hashes, last_update_time
+    try:
+        response = urllib.request.urlopen(VIRUS_DB_URL)
+        data = response.read().decode('utf-8')
+        virus_hashes = set(line.strip() for line in data.strip().splitlines() if line.strip())
+        last_update_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        update_label.config(text=f"✅ Virus DB Updated: {last_update_time}")
+    except Exception as e:
+        update_label.config(text=f"⚠️ Error updating DB: {e}")
+
+def start_auto_update():
+    def updater():
+        while True:
+            fetch_and_update_hashes()
+            time.sleep(UPDATE_INTERVAL_MINUTES * 60)
+    threading.Thread(target=updater, daemon=True).start()
+
+def scan_directory(directory, output_box, progress_widget=None):
+    global infected_files
+    infected_files = []
+    output_box.insert(tk.END, f"Scanning directory: {directory}\n\n")
+
+    # Count total files first
+    all_files = []
+    for root, _, files in os.walk(directory):
+        for filename in files:
+            all_files.append(os.path.join(root, filename))
+
+    total = len(all_files)
+    if total == 0:
+        output_box.insert(tk.END, "No files found to scan.\n")
+        return
+
+    for i, filepath in enumerate(all_files):
+
+        # 🟡 Check for pause
+        while scan_paused.is_set():
+            time.sleep(0.2)  # Wait while paused
+
+        # 🔴 Check for stop (optional if you want stop functionality)
+        if scan_stopped.is_set():
+            output_box.insert(tk.END, "\n⚠️ Scan Stopped.\n")
+            return
+
+        file_hash = calculate_sha256(filepath)
+        if file_hash:
+            if file_hash in virus_hashes:
+                msg = f"[!] Infected: {filepath}\n"
+                infected_files.append(filepath)
+            else:
+                msg = f"[+] Safe: {filepath}\n"
+            output_box.insert(tk.END, msg)
+            output_box.see(tk.END)
+
+        # Update donut percent
+        if progress_widget:
+            percent = ((i + 1) / total) * 100
+            progress_widget.update_progress(percent)
+
+    output_box.insert(tk.END, "\nScan completed.\n")
+    if infected_files:
+        output_box.insert(tk.END, "Infected files found:\n")
+        for file in infected_files:
+            output_box.insert(tk.END, f" - {file}\n")
+    else:
+        output_box.insert(tk.END, "No infected files detected.\n")
+    output_box.see(tk.END)
+
+def delete_infected_files(output_box):
+    if not infected_files:
+        messagebox.showinfo("Info", "No infected files to delete.")
+        return
+
+    confirm = messagebox.askyesno("Confirm Delete", "Are you sure you want to delete all infected files?")
+    if not confirm:
+        return
+
+    deleted = []
+    for file in infected_files:
+        try:
+            os.remove(file)
+            deleted.append(file)
+        except Exception as e:
+            output_box.insert(tk.END, f"❌ Failed to delete {file}: {e}\n")
+
+    output_box.insert(tk.END, "\n🗑️ Deleted files:\n")
+    for file in deleted:
+        output_box.insert(tk.END, f" - {file}\n")
+    infected_files.clear()
+
+def quarantine_files(output_box):
+    if not infected_files:
+        messagebox.showinfo("Info", "No infected files to quarantine.")
+        return
+
+    quarantine_dir = os.path.join(os.getcwd(), "quarantine")
+    os.makedirs(quarantine_dir, exist_ok=True)
+
+    moved = []
+    for file in infected_files:
+        try:
+            filename = os.path.basename(file)
+            shutil.move(file, os.path.join(quarantine_dir, filename))
+            moved.append(file)
+        except Exception as e:
+            output_box.insert(tk.END, f"❌ Failed to quarantine {file}: {e}\n")
+
+    output_box.insert(tk.END, f"\n📁 Moved {len(moved)} files to quarantine folder.\n")
+    infected_files.clear()
+
+# === GUI FUNCTIONS ===
+def select_folder():
+    folder = filedialog.askdirectory()
+    if folder:
+        folder_entry.delete(0, tk.END)
+        folder_entry.insert(0, folder)
+
+def start_scan():
+    folder = folder_entry.get()
+    output_box.delete('1.0', tk.END)
+    if not folder or not os.path.isdir(folder):
+        messagebox.showerror("Error", "Please select a valid folder or drive to scan.")
+        return
+
+    progress_donut.show()
+    progress_donut.update_progress(0)
+
+    def run_scan():
+        scan_directory(folder, output_box, progress_donut)
+        progress_donut.hide()
+
+    threading.Thread(target=run_scan, daemon=True).start()
+
+
+    # Start spinner
+    progress.pack(pady=5)
+    progress.start()
+
+    def run_scan():
+        scan_directory(folder, output_box)
+        progress.stop()
+        progress.pack_forget()
+
+    threading.Thread(target=run_scan, daemon=True).start()
+
+# === GUI SETUP ===
+class CircularSpinner:
+    def __init__(self, parent, size=30, speed=100):
+        self.parent = parent
+        self.canvas = tk.Canvas(parent, width=size, height=size + 30, highlightthickness=0, bg="white")
+        self.arc = self.canvas.create_arc(5, 5, size - 5, size - 5, start=0, extent=40, style='arc', width=5)
+        self.glow = self.canvas.create_oval(8, 8, size - 8, size - 8, outline="", fill="", width=0)
+        self.label = self.canvas.create_text(size // 2, size + 10, text="🔍 Scanning...", font=("Helvetica", 10),
+                                             fill="#000")
+
+        self.angle = 0
+        self.speed = speed
+        self.running = False
+        self.colors = ["red", "orange", "gold", "green", "blue", "purple", "cyan"]
+        self.color_index = 0
+        self.fade_level = 0
+        self.fade_direction = 1
+
+    def start(self):
+        self.running = True
+        self.canvas.pack(pady=10)
+        self.animate()
+
+    def animate(self):
+        if self.running:
+            # Spinner rotation
+            self.angle = (self.angle + 15) % 360
+            self.color_index = (self.color_index + 1) % len(self.colors)
+            color = self.colors[self.color_index]
+            self.canvas.itemconfig(self.arc, start=self.angle, outline=color)
+
+            # Fading glow
+            glow_color = self._hex_with_alpha(color, self.fade_level)
+            self.canvas.itemconfig(self.glow, fill=glow_color)
+            self.fade_level += 10 * self.fade_direction
+            if self.fade_level >= 150 or self.fade_level <= 50:
+                self.fade_direction *= -1
+
+            # Text fade (optional visual polish)
+            text_color = self._hex_with_alpha("#000000", self.fade_level)
+            self.canvas.itemconfig(self.label, fill=text_color)
+
+            self.canvas.after(self.speed, self.animate)
+
+    def _hex_with_alpha(self, hex_color, alpha):
+        """Convert color and alpha into hex rgba-like value for tkinter-compatible glow"""
+        from PIL import ImageColor
+        try:
+            r, g, b = ImageColor.getrgb(hex_color)
+            return f"#{r:02x}{g:02x}{b:02x}"
+        except:
+            return hex_color
+
+    def stop(self):
+        self.running = False
+        self.canvas.pack_forget()
+
+root = tk.Tk()
+spinner = CircularSpinner(root)
+
+root.title("SICT TOTAL INTERNET SECURITY")
+root.iconbitmap('sictimg.ico')
+root.geometry("850x700")
+
+# Folder selection
+folder_frame = tk.Frame(root)
+folder_frame.pack(pady=10)
+
+folder_entry = tk.Entry(folder_frame, width=60)
+folder_entry.pack(side=tk.LEFT, padx=5)
+
+browse_button = tk.Button(folder_frame, text="📁 Select Drive/ Folder", command=select_folder)
+browse_button.pack(side=tk.LEFT)
+
+# Scan Button
+scan_button = tk.Button(root, text="🚀 Scan for Viruses", command=start_scan, bg="darkred", fg="white", width=25, font=("Arial", 10, "bold"))
+scan_button.pack(pady=10)
+
+pause_button = tk.Button(root, text="⏸ Pause Scan", command=toggle_pause, bg="blue", fg="white")
+pause_button.pack(pady=5)
+
+status_label = tk.Label(root, text="")
+status_label.pack()
+
+# Output Box
+output_box = scrolledtext.ScrolledText(root, width=85, height=20, font=("Consolas", 9))
+output_box.pack(padx=10, pady=10)
+
+# Update label
+update_label = tk.Label(root, text="Virus DB: Not updated yet", fg="blue")
+update_label.pack(pady=5)
+
+# Action Buttons
+action_frame = tk.Frame(root)
+action_frame.pack(pady=5)
+
+delete_button = tk.Button(action_frame, text="❌ Delete Infected Files", command=lambda: delete_infected_files(output_box), bg="maroon", fg="white")
+delete_button.pack(side=tk.LEFT, padx=10)
+
+quarantine_button = tk.Button(action_frame, text="📦 Quarantine Infected Files", command=lambda: quarantine_files(output_box), bg="orange", fg="black")
+quarantine_button.pack(side=tk.LEFT)
+
+# Start auto-updating virus DB
+start_auto_update()
+auto_scan()  # 👈 Add this
+
+
+def create_image():
+    image = Image.new('RGB', (64, 64), "red")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((8, 8, 56, 56), fill="white")
+    draw.text((18, 18), "AV", fill="black")
+    return image
+
+def on_quit(icon, item):
+    icon.stop()
+    root.destroy()
+
+def on_show(icon, item):
+    root.after(0, root.deiconify)
+
+# Run GUI
+progress_donut = CircularProgressDonut(root)
+progress_donut.hide()
+
+progress = ttk.Progressbar(root, mode='indeterminate', length=200)
+root.mainloop()
