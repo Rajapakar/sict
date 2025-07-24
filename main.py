@@ -760,7 +760,7 @@ def setup_tray():
     icon = TrayIcon("Antivirus", icon_image, "Python Antivirus", menu)
     threading.Thread(target=icon.run, daemon=True).start()
 # Run GUI
-show_toast_overlay("✅ SICT AntiVirus updated successfully!")
+show_toast_overlay("✅ SICT INDIA AntiVirus updated successfully!")
 progress = ttk.Progressbar(root, mode='indeterminate', length=200)
 footer_label.pack(pady=5)
 
